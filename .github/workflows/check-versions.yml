@@ -1,0 +1,176 @@
+name: Check Package Versions
+
+on:
+  # schedule:
+  #   # Run every 12 hours
+  #   - cron: '0 */12 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: check-versions
+  cancel-in-progress: true
+
+jobs:
+  detect-updates:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has_updates: ${{ steps.set-matrix.outputs.has_updates }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate package files
+        run: |
+          echo "Validating package files in packages/..."
+
+          REQUIRED_FIELDS="name source_type source file_type version"
+          ALLOWED_SOURCE_TYPES="brew"
+          ALLOWED_FILE_TYPES="dmg pkg zip"
+          VALIDATION_FAILED=0
+          PACKAGE_COUNT=0
+
+          shopt -s nullglob
+          PKG_FILES=( packages/*.yaml )
+          shopt -u nullglob
+
+          if [ "${#PKG_FILES[@]}" -eq 0 ]; then
+            echo "ERROR: No package files found in packages/"
+            exit 1
+          fi
+
+          for PKG_FILE in "${PKG_FILES[@]}"; do
+            PACKAGE_COUNT=$(( PACKAGE_COUNT + 1 ))
+            PKG_NAME=$(yq eval '.name' "${PKG_FILE}")
+            DISPLAY_NAME="${PKG_NAME:-${PKG_FILE}}"
+
+            for FIELD in ${REQUIRED_FIELDS}; do
+              VALUE=$(yq eval ".${FIELD}" "${PKG_FILE}")
+              if [ -z "${VALUE}" ] || [ "${VALUE}" = "null" ]; then
+                echo "ERROR: Package '${DISPLAY_NAME}' (${PKG_FILE}) is missing required field: '${FIELD}'"
+                VALIDATION_FAILED=1
+              fi
+            done
+
+            SOURCE_TYPE=$(yq eval '.source_type' "${PKG_FILE}")
+            if [ -n "${SOURCE_TYPE}" ] && [ "${SOURCE_TYPE}" != "null" ]; then
+              SOURCE_TYPE_VALID=0
+              for ALLOWED in ${ALLOWED_SOURCE_TYPES}; do
+                if [ "${SOURCE_TYPE}" = "${ALLOWED}" ]; then SOURCE_TYPE_VALID=1; break; fi
+              done
+              if [ "${SOURCE_TYPE_VALID}" -eq 0 ]; then
+                echo "ERROR: Package '${DISPLAY_NAME}' (${PKG_FILE}) has invalid source_type '${SOURCE_TYPE}'. Allowed values: ${ALLOWED_SOURCE_TYPES}"
+                VALIDATION_FAILED=1
+              fi
+            fi
+
+            FILE_TYPE=$(yq eval '.file_type' "${PKG_FILE}")
+            if [ -n "${FILE_TYPE}" ] && [ "${FILE_TYPE}" != "null" ]; then
+              FILE_TYPE_VALID=0
+              for ALLOWED in ${ALLOWED_FILE_TYPES}; do
+                if [ "${FILE_TYPE}" = "${ALLOWED}" ]; then FILE_TYPE_VALID=1; break; fi
+              done
+              if [ "${FILE_TYPE_VALID}" -eq 0 ]; then
+                echo "ERROR: Package '${DISPLAY_NAME}' (${PKG_FILE}) has invalid file_type '${FILE_TYPE}'. Allowed values: ${ALLOWED_FILE_TYPES}"
+                VALIDATION_FAILED=1
+              fi
+            fi
+          done
+
+          if [ "${VALIDATION_FAILED}" -eq 1 ]; then
+            echo ""
+            echo "Package validation failed. Fix the errors above before re-running the workflow."
+            exit 1
+          fi
+
+          echo "Package validation passed for ${PACKAGE_COUNT} package(s)."
+
+      - name: Check for package updates
+        id: set-matrix
+        run: bash scripts/detect-updates.sh
+
+  virustotal-scan:
+    needs: detect-updates
+    if: needs.detect-updates.outputs.has_updates == 'true'
+    runs-on: ubuntu-slim
+    strategy:
+      matrix: ${{ fromJson(needs.detect-updates.outputs.matrix) }}
+      fail-fast: false
+
+    name: Scan ${{ matrix.name }} with VirusTotal
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Scan package with VirusTotal
+        env:
+          PACKAGE_NAME: ${{ matrix.name }}
+          LATEST_VERSION: ${{ matrix.latest_version }}
+          DOWNLOAD_URL: ${{ matrix.download_url }}
+          EXPECTED_SHA256: ${{ matrix.sha256 }}
+          MATRIX_SOURCE: ${{ matrix.source }}
+          VT_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+        run: bash scripts/virustotal-scan.sh
+
+      - name: Upload scan results artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: virustotal-scan-${{ matrix.source }}
+          path: scan-results/${{ matrix.source }}.json
+          retention-days: 30
+
+  create-prs:
+    needs: [detect-updates, virustotal-scan]
+    if: needs.detect-updates.outputs.has_updates == 'true'
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+      pull-requests: write
+    strategy:
+      matrix: ${{ fromJson(needs.detect-updates.outputs.matrix) }}
+      fail-fast: false
+
+    name: Update ${{ matrix.name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Download VirusTotal scan results
+        uses: actions/download-artifact@v8
+        with:
+          name: virustotal-scan-${{ matrix.source }}
+          path: scan-results
+        continue-on-error: true
+
+      - name: Update version and generate PR body
+        env:
+          PACKAGE_NAME: ${{ matrix.name }}
+          MATRIX_SOURCE: ${{ matrix.source }}
+          CURRENT_VERSION: ${{ matrix.current_version }}
+          LATEST_VERSION: ${{ matrix.latest_version }}
+          URL_VERIFIED: ${{ matrix.url_verified }}
+          DOWNLOAD_URL: ${{ matrix.download_url }}
+          SHA256: ${{ matrix.sha256 }}
+          HOMEPAGE: ${{ matrix.homepage }}
+          TIMESTAMP: ${{ matrix.timestamp }}
+          UNIX_TIMESTAMP: ${{ matrix.unix_timestamp }}
+          VERIFIED_DOMAIN: ${{ matrix.verified_domain }}
+        run: bash scripts/create-pr.sh
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update ${{ matrix.name }} to ${{ matrix.latest_version }}"
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          branch: automated/update-${{ matrix.source }}-${{ matrix.latest_version }}
+          delete-branch: true
+          title: "📦 Update ${{ matrix.name }} to ${{ matrix.latest_version }}"
+          body-path: ${{ runner.temp }}/pr_body.md
+          labels: |
+            automated
+            dependencies
+            security-review

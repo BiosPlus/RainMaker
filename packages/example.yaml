@@ -1,0 +1,18 @@
+name: "Mozilla Firefox"
+source_type: "brew"
+source: "firefox"
+file_type: "dmg"
+version: "149.0"
+iru_library_item_id: ""
+# Install behavior
+install_enforcement: "install_once" # install_once | continuously_enforce | no_enforcement
+active: true
+restart: false
+# Scripts
+preinstall_script: ""
+postinstall_script: ""
+audit_script: "" # required when install_enforcement: continuously_enforce
+# Self Service
+show_in_self_service: false
+self_service_category_id: "" # required when show_in_self_service: true
+self_service_recommended: false

@@ -1,0 +1,75 @@
+name: Iru Package Sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/**
+
+concurrency:
+  group: iru-sync
+  cancel-in-progress: true
+
+jobs:
+
+  detect-changes:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      has_iru_packages: ${{ steps.build-matrix.outputs.has_iru_packages }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2  # required for git diff HEAD~1 HEAD
+
+      - name: Detect changed Iru packages
+        id: build-matrix
+        env:
+          IRU_API_KEY: ${{ secrets.IRU_API_KEY }}
+        run: bash scripts/detect-iru-changes.sh
+
+  iru-upload:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_iru_packages == 'true'
+    runs-on: ubuntu-slim
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+      fail-fast: false
+
+    name: Sync ${{ matrix.name }} to Iru
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Upload to Iru
+        env:
+          PACKAGE_NAME:              ${{ matrix.name }}
+          MATRIX_SOURCE:             ${{ matrix.source }}
+          DOWNLOAD_URL:              ${{ matrix.download_url }}
+          EXPECTED_SHA256:           ${{ matrix.sha256 }}
+          PACKAGE_VERSION:           ${{ matrix.version }}
+          FILE_TYPE:                 ${{ matrix.file_type }}
+          IRU_LIBRARY_ITEM_ID:       ${{ matrix.iru_library_item_id }}
+          IRU_API_KEY:               ${{ secrets.IRU_API_KEY }}
+          IRU_TENANT_URL:            ${{ secrets.IRU_TENANT_URL }}
+          INSTALL_ENFORCEMENT:       ${{ matrix.install_enforcement }}
+          UNZIP_LOCATION:            ${{ matrix.unzip_location }}
+          AUDIT_SCRIPT:              ${{ matrix.audit_script }}
+          PREINSTALL_SCRIPT:         ${{ matrix.preinstall_script }}
+          POSTINSTALL_SCRIPT:        ${{ matrix.postinstall_script }}
+          SHOW_IN_SELF_SERVICE:      ${{ matrix.show_in_self_service }}
+          SELF_SERVICE_CATEGORY_ID:  ${{ matrix.self_service_category_id }}
+          SELF_SERVICE_RECOMMENDED:  ${{ matrix.self_service_recommended }}
+          ACTIVE:                    ${{ matrix.active }}
+          RESTART:                   ${{ matrix.restart }}
+        run: bash scripts/iru-upload.sh
+
+      - name: Upload Iru result artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: iru-sync-${{ matrix.source }}
+          path: iru-results/${{ matrix.source }}.json
+          retention-days: 30

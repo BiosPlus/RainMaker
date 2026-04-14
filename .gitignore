@@ -1,0 +1,12 @@
+# Temp files
+*.dmg
+*.pkg
+*.zip
+/tmp/
+
+# Build artifacts
+package-results.json
+scan-results/
+
+# macOS
+.DS_Store
