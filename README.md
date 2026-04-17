@@ -40,6 +40,35 @@ The exception being the `GITHUB_TOKEN`, which is automatically provided by GitHu
 |--------|---------|----------|
 | `GITHUB_TOKEN` | `check-versions.yml` | Built-in -- no configuration needed |
 
+#### Configuring the Iru API key
+
+The `IRU_API_KEY` secret must be a Iru API token scoped with the following permissions. Grant only the permissions listed below -- do not use an all-access token.
+
+**Library Items**
+
+| Permission | Method | Endpoint |
+|------------|--------|----------|
+| View Library Item Activity | GET | `/api/v1/library/library-items/{library_item_id}/activity` |
+| View Library Item Status | GET | `/api/v1/library/library-items/{library_item_id}/status` |
+
+**Custom Apps**
+
+| Permission | Method | Endpoint |
+|------------|--------|----------|
+| Create Custom App | POST | `/api/v1/library/custom-apps` |
+| Upload Custom App | POST | `/api/v1/library/custom-apps/upload` |
+| Update Custom App | PATCH | `/api/v1/library/custom-apps/{custom_app_id}` |
+| List Custom Apps | GET | `/api/v1/library/custom-apps` |
+| Get Custom App | GET | `/api/v1/library/custom-apps/{custom_app_id}` |
+
+**Self Service**
+
+| Permission | Method | Endpoint |
+|------------|--------|----------|
+| List Self Service Categories | GET | `/api/v1/self-service/categories` |
+
+To generate a token, go to your Iru tenant at **Settings > Access > API Token**, create a new token, and enable the permissions above. Copy the resulting token value into the `IRU_API_KEY` secret.
+
 ### 3. (Optional) Enable scheduled runs
 
 Uncomment the cron schedule in `.github/workflows/check-versions.yml` to run version checks automatically:
